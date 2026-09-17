@@ -35,7 +35,7 @@ jobs:
     outputs:
       branches: ${{ steps.find.outputs.branches }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # ratchet:actions/checkout@v7.0.0
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -120,7 +120,7 @@ jobs:
         branch: ${{ fromJson(needs.discover.outputs.branches) }}
       fail-fast: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # ratchet:actions/checkout@v7.0.0
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -154,7 +154,7 @@ jobs:
           steps.check.outputs.changed == 'true'
           && github.event_name != 'pull_request'
           && inputs.dry-run != 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # ratchet:peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: 'chore: sync major_version_bumps.yaml from master'
