@@ -21,6 +21,10 @@ on:
         description: 'Only target this release branch (e.g. release-5.0). Leave empty for all.'
         type: string
         default: ''
+      supported-versions:
+        description: 'Comma-separated list of versions to sync (e.g. "4.10,4.11,5.0"). Overrides the RH API lookup. Useful for testing or when the API is unavailable.'
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -44,73 +48,77 @@ jobs:
         id: find
         env:
           TARGET_BRANCH: ${{ inputs.target-branch }}
+          SUPPORTED_VERSIONS_OVERRIDE: ${{ inputs.supported-versions }}
           RH_API_URL: "https://access.redhat.com/product-life-cycles/api/v1/products?name=Red%20Hat%20Advanced%20Cluster%20Security%20for%20Kubernetes"
         run: |
           set -euo pipefail
 
           BUMP_FILE="pkg/version/productstreams/major_version_bumps.yaml"
 
-          # Query the RH Product Lifecycles API to find the oldest supported version.
-          # All release branches with a version >= this threshold are eligible for sync.
-          # If the API is unreachable, fall back to syncing all branches that have the file.
-          MIN_MAJOR=0
-          MIN_MINOR=0
-          API_AVAILABLE=false
+          # Build the list of supported versions, either from the override input
+          # or by querying the RH Product Lifecycles API.
+          # Matching logic: type != "End of life" (same filter as
+          # .openshift-ci/get_latest_helm_chart_versions.py:get_supported_releases).
+          SUPPORTED_VERSIONS="[]"
 
-          if response=$(curl -sf -H 'User-Agent: Mozilla/5.0' "$RH_API_URL" 2>/dev/null); then
-            oldest=$(echo "$response" | jq -r '
-              [.data[0].versions[]
-               | select(.type != "End of life")
-               | .name
-               | split(".")
-               | {major: (.[0] | tonumber), minor: (.[1] | tonumber)}
-              ] | sort_by(.major, .minor) | first | "\(.major) \(.minor)"
-            ')
-            if [[ -n "$oldest" && "$oldest" != "null" ]]; then
-              MIN_MAJOR=$(echo "$oldest" | cut -d' ' -f1)
-              MIN_MINOR=$(echo "$oldest" | cut -d' ' -f2)
-              API_AVAILABLE=true
-              echo "RH API: oldest supported version is ${MIN_MAJOR}.${MIN_MINOR}"
-            fi
-          fi
-
-          if [[ "$API_AVAILABLE" == "false" ]]; then
-            echo "::warning::RH Product Lifecycles API unreachable, falling back to all branches with bump file"
-          fi
-
-          BRANCHES="[]"
-
-          if [[ -n "$TARGET_BRANCH" ]]; then
-            # Single branch mode: validate it exists and has the bump file.
-            if git show "origin/${TARGET_BRANCH}:${BUMP_FILE}" &>/dev/null; then
-              BRANCHES=$(jq -nc --arg b "$TARGET_BRANCH" '[$b]')
-            else
-              echo "::warning::Branch ${TARGET_BRANCH} does not exist or does not have ${BUMP_FILE}, skipping"
-            fi
+          if [[ -n "$SUPPORTED_VERSIONS_OVERRIDE" ]]; then
+            SUPPORTED_VERSIONS=$(echo "$SUPPORTED_VERSIONS_OVERRIDE" | tr ',' '\n' | jq -R . | jq -sc .)
+            echo "Using override supported versions: $SUPPORTED_VERSIONS"
           else
-            for ref in $(git branch -r --list 'origin/release-*' | tr -d ' '); do
-              branch="${ref#origin/}"
-              # Extract X.Y from "release-X.Y".
-              version="${branch#release-}"
-              major="${version%%.*}"
-              minor="${version#*.}"
-
-              # Skip branches older than the oldest supported version.
-              if [[ "$API_AVAILABLE" == "true" ]]; then
-                if (( major < MIN_MAJOR || (major == MIN_MAJOR && minor < MIN_MINOR) )); then
-                  echo "Skipping ${branch}: version ${major}.${minor} is older than supported ${MIN_MAJOR}.${MIN_MINOR}"
-                  continue
-                fi
+            MAX_RETRIES=3
+            RETRY_DELAY=5
+            for attempt in $(seq 1 "$MAX_RETRIES"); do
+              if response=$(curl -sf --max-time 30 -H 'User-Agent: Mozilla/5.0' "$RH_API_URL" 2>/dev/null); then
+                SUPPORTED_VERSIONS=$(echo "$response" | jq -c '
+                  [.data[0].versions[]
+                   | select(.type != "End of life")
+                   | .name
+                  ]
+                ')
+                echo "RH API: supported versions are $SUPPORTED_VERSIONS"
+                break
               fi
-
-              # Only sync to branches that already have the bump file.
-              if git show "${ref}:${BUMP_FILE}" &>/dev/null; then
-                BRANCHES=$(echo "$BRANCHES" | jq --arg b "$branch" '. + [$b]')
-              else
-                echo "Skipping ${branch}: does not have ${BUMP_FILE}"
+              if (( attempt < MAX_RETRIES )); then
+                echo "::warning::RH API attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${RETRY_DELAY}s..."
+                sleep "$RETRY_DELAY"
               fi
             done
+
+            if [[ "$SUPPORTED_VERSIONS" == "[]" ]]; then
+              echo "::error::RH Product Lifecycles API is unreachable after ${MAX_RETRIES} attempts. Trigger a manual run with the 'supported-versions' input to override."
+              exit 1
+            fi
           fi
+
+          # Single branch mode: the target-branch input overrides discovery.
+          if [[ -n "$TARGET_BRANCH" ]]; then
+            if git show "origin/${TARGET_BRANCH}:${BUMP_FILE}" &>/dev/null; then
+              echo "branches=$(jq -nc --arg b "$TARGET_BRANCH" '[$b]')" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::Branch ${TARGET_BRANCH} does not exist or does not have ${BUMP_FILE}"
+              exit 1
+            fi
+            exit 0
+          fi
+
+          # Match supported versions to release branches that have the bump file.
+          BRANCHES="[]"
+          for version in $(echo "$SUPPORTED_VERSIONS" | jq -r '.[]'); do
+            branch="release-${version}"
+            ref="origin/${branch}"
+
+            if ! git rev-parse --verify "$ref" &>/dev/null; then
+              echo "Skipping ${version}: branch ${branch} does not exist"
+              continue
+            fi
+
+            if ! git show "${ref}:${BUMP_FILE}" &>/dev/null; then
+              echo "Skipping ${branch}: does not have ${BUMP_FILE}"
+              continue
+            fi
+
+            BRANCHES=$(echo "$BRANCHES" | jq --arg b "$branch" '. + [$b]')
+          done
 
           echo "branches=$BRANCHES" >> "$GITHUB_OUTPUT"
           echo "Branches to sync: $BRANCHES"
