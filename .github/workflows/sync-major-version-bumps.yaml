@@ -101,7 +101,7 @@ jobs:
               continue
             fi
 
-            BRANCHES=$(echo "$BRANCHES" | jq --arg b "$branch" '. + [$b]')
+            BRANCHES=$(echo "$BRANCHES" | jq -c --arg b "$branch" '. + [$b]')
           done
 
           echo "branches=$BRANCHES" >> "$GITHUB_OUTPUT"
