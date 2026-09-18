@@ -85,35 +85,42 @@ jobs:
             fi
           fi
 
-          # Match supported versions to release branches that have the bump file.
+          # Match supported versions to release branches that need syncing.
           BRANCHES="[]"
+          SUMMARY="| Version | Branch | Status |\n|---------|--------|--------|\n"
+          master_content=$(git show "origin/master:${BUMP_FILE}")
+
           for version in $(echo "$SUPPORTED_VERSIONS" | jq -r '.[]'); do
             branch="release-${version}"
             ref="origin/${branch}"
 
             if ! git rev-parse --verify "$ref" &>/dev/null; then
-              echo "Skipping ${version}: branch ${branch} does not exist"
+              SUMMARY+="| ${version} | ${branch} | :grey_question: No branch found |\n"
               continue
             fi
 
             if ! git show "${ref}:${BUMP_FILE}" &>/dev/null; then
-              echo "Skipping ${branch}: does not have ${BUMP_FILE}"
+              SUMMARY+="| ${version} | ${branch} | :warning: No bump file |\n"
               continue
             fi
 
-            # Only include branches where the file actually differs from master.
-            master_content=$(git show "origin/master:${BUMP_FILE}")
             branch_content=$(git show "${ref}:${BUMP_FILE}")
             if [[ "$master_content" == "$branch_content" ]]; then
-              echo "Skipping ${branch}: already up to date"
+              SUMMARY+="| ${version} | ${branch} | :white_check_mark: Already up to date |\n"
               continue
             fi
 
             BRANCHES=$(echo "$BRANCHES" | jq -c --arg b "$branch" '. + [$b]')
+            SUMMARY+="| ${version} | ${branch} | :arrow_right: Syncing |\n"
           done
 
           echo "branches=$BRANCHES" >> "$GITHUB_OUTPUT"
-          echo "Branches to sync: $BRANCHES"
+
+          echo -e "## Version bump sync summary\n" >> "$GITHUB_STEP_SUMMARY"
+          echo -e "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$BRANCHES" == "[]" ]]; then
+            echo -e "\nAll branches are up to date. No sync PRs needed." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   sync:
     name: Sync to ${{ matrix.branch }}
