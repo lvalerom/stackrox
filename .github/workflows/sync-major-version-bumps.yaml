@@ -95,23 +95,23 @@ jobs:
             ref="origin/${branch}"
 
             if ! git rev-parse --verify "$ref" &>/dev/null; then
-              SUMMARY+="| ${version} | ${branch} | :grey_question: No branch found |\n"
+              SUMMARY+="| ${version} | ${branch} | :grey_question: Branch does not exist |\n"
               continue
             fi
 
             if ! git show "${ref}:${BUMP_FILE}" &>/dev/null; then
-              SUMMARY+="| ${version} | ${branch} | :warning: No bump file |\n"
+              SUMMARY+="| ${version} | ${branch} | :warning: Branch exists but bump file not present |\n"
               continue
             fi
 
             branch_content=$(git show "${ref}:${BUMP_FILE}")
             if [[ "$master_content" == "$branch_content" ]]; then
-              SUMMARY+="| ${version} | ${branch} | :white_check_mark: Already up to date |\n"
+              SUMMARY+="| ${version} | ${branch} | :white_check_mark: File matches master |\n"
               continue
             fi
 
             BRANCHES=$(echo "$BRANCHES" | jq -c --arg b "$branch" '. + [$b]')
-            SUMMARY+="| ${version} | ${branch} | :arrow_right: Syncing |\n"
+            SUMMARY+="| ${version} | ${branch} | :arrow_right: File differs, sync PR will be created |\n"
           done
 
           echo "branches=$BRANCHES" >> "$GITHUB_OUTPUT"
