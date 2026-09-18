@@ -9,6 +9,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/sync-major-version-bumps.yaml
+      - .github/scripts/sync-major-version-bumps.py
   schedule:
     - cron: '0 8 * * 1'
   workflow_dispatch:
@@ -22,147 +23,26 @@ on:
         type: string
         default: ''
 
-permissions: {}
+permissions:
+  contents: write
+  pull-requests: write
 
 defaults:
   run:
     shell: bash
 
 jobs:
-  discover:
-    name: Discover release branches
-    runs-on: ubuntu-latest
-    outputs:
-      branches: ${{ steps.find.outputs.branches }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # ratchet:actions/checkout@v7.0.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Find target release branches
-        id: find
-        env:
-          SUPPORTED_VERSIONS_OVERRIDE: ${{ inputs.supported-versions }}
-          RH_API_URL: "https://access.redhat.com/product-life-cycles/api/v1/products?name=Red%20Hat%20Advanced%20Cluster%20Security%20for%20Kubernetes"
-        run: |
-          set -euo pipefail
-
-          BUMP_FILE="pkg/version/productstreams/major_version_bumps.yaml"
-
-          # Build the list of supported versions, either from the override input
-          # or by querying the RH Product Lifecycles API.
-          # Matching logic: type != "End of life" (same filter as
-          # .openshift-ci/get_latest_helm_chart_versions.py:get_supported_releases).
-          SUPPORTED_VERSIONS="[]"
-
-          if [[ -n "$SUPPORTED_VERSIONS_OVERRIDE" ]]; then
-            SUPPORTED_VERSIONS=$(echo "$SUPPORTED_VERSIONS_OVERRIDE" | tr ',' '\n' | jq -R . | jq -sc .)
-            echo "Using override supported versions: $SUPPORTED_VERSIONS"
-          else
-            MAX_RETRIES=3
-            RETRY_DELAY=5
-            for attempt in $(seq 1 "$MAX_RETRIES"); do
-              if response=$(curl -sf --max-time 30 -H 'User-Agent: Mozilla/5.0' "$RH_API_URL" 2>/dev/null); then
-                SUPPORTED_VERSIONS=$(echo "$response" | jq -c '
-                  [.data[0].versions[]
-                   | select(.type != "End of life")
-                   | .name
-                  ]
-                ')
-                echo "RH API: supported versions are $SUPPORTED_VERSIONS"
-                break
-              fi
-              if (( attempt < MAX_RETRIES )); then
-                echo "::warning::RH API attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${RETRY_DELAY}s..."
-                sleep "$RETRY_DELAY"
-              fi
-            done
-
-            if [[ "$SUPPORTED_VERSIONS" == "[]" ]]; then
-              echo "::error::RH Product Lifecycles API is unreachable after ${MAX_RETRIES} attempts. Trigger a manual run with the 'supported-versions' input to override."
-              exit 1
-            fi
-          fi
-
-          # Match supported versions to release branches that need syncing.
-          BRANCHES="[]"
-          SUMMARY="| Version | Branch | Status |\n|---------|--------|--------|\n"
-          master_content=$(git show "origin/master:${BUMP_FILE}")
-
-          for version in $(echo "$SUPPORTED_VERSIONS" | jq -r '.[]'); do
-            branch="release-${version}"
-            ref="origin/${branch}"
-
-            if ! git rev-parse --verify "$ref" &>/dev/null; then
-              SUMMARY+="| ${version} | ${branch} | :grey_question: Branch does not exist |\n"
-              continue
-            fi
-
-            if ! git show "${ref}:${BUMP_FILE}" &>/dev/null; then
-              SUMMARY+="| ${version} | ${branch} | :warning: Branch exists but bump file not present |\n"
-              continue
-            fi
-
-            branch_content=$(git show "${ref}:${BUMP_FILE}")
-            if [[ "$master_content" == "$branch_content" ]]; then
-              SUMMARY+="| ${version} | ${branch} | :white_check_mark: File matches master |\n"
-              continue
-            fi
-
-            BRANCHES=$(echo "$BRANCHES" | jq -c --arg b "$branch" '. + [$b]')
-            SUMMARY+="| ${version} | ${branch} | :arrow_right: File differs, sync PR will be created |\n"
-          done
-
-          echo "branches=$BRANCHES" >> "$GITHUB_OUTPUT"
-
-          echo -e "## Version bump sync summary\n" >> "$GITHUB_STEP_SUMMARY"
-          echo -e "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
-          if [[ "$BRANCHES" == "[]" ]]; then
-            echo -e "\nAll branches are up to date. No sync PRs needed." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
   sync:
-    name: Sync to ${{ matrix.branch }}
-    needs: discover
-    if: needs.discover.outputs.branches != '[]'
+    name: Sync version bumps
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    strategy:
-      matrix:
-        branch: ${{ fromJson(needs.discover.outputs.branches) }}
-      fail-fast: false
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # ratchet:actions/checkout@v7.0.0
         with:
-          ref: ${{ matrix.branch }}
           fetch-depth: 0
-          persist-credentials: true
 
-      - name: Copy bump file from master
-        run: |
-          set -euo pipefail
-          git show origin/master:pkg/version/productstreams/major_version_bumps.yaml \
-            > pkg/version/productstreams/major_version_bumps.yaml
-
-      - name: Create Pull Request
-        if: >-
-          github.event_name != 'pull_request'
-          && inputs.dry-run != 'true'
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # ratchet:peter-evans/create-pull-request@v8
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: 'chore: sync major_version_bumps.yaml from master'
-          branch: automated/sync-version-bumps-${{ matrix.branch }}
-          base: ${{ matrix.branch }}
-          delete-branch: true
-          draft: true
-          title: 'chore(${{ matrix.branch }}): sync major_version_bumps.yaml from master'
-          body: |
-            Automated sync of `pkg/version/productstreams/major_version_bumps.yaml` from `master` to `${{ matrix.branch }}`.
-
-            This keeps the major version bump history up to date so that builds from this release branch compute correct version compatibility ranges.
-          labels: |
-            automated
+      - name: Sync major version bumps to release branches
+        env:
+          DRY_RUN: ${{ inputs.dry-run }}
+          SUPPORTED_VERSIONS_OVERRIDE: ${{ inputs.supported-versions }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/sync-major-version-bumps.py
