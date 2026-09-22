@@ -124,7 +124,7 @@ def create_or_update_pr(branch, master_content):
     try:
         existing_pr = find_open_pr(sync_branch, branch)
     except subprocess.CalledProcessError as e:
-        return f":x: Failed to query open PRs: {e}", False
+        return ":x: Failed to query open PRs", False
 
     if existing_pr:
         pr_number = existing_pr["number"]
@@ -136,7 +136,7 @@ def create_or_update_pr(branch, master_content):
             update_sync_branch(sync_branch, master_content)
             return f":arrows_counterclockwise: PR #{pr_number} updated with new commit", True
         except subprocess.CalledProcessError as e:
-            return f":x: Failed to update PR #{pr_number}: {e}", False
+            return f":x: Failed to update PR #{pr_number}", False
     else:
         try:
             cleanup_stale_branch(sync_branch)
@@ -144,7 +144,7 @@ def create_or_update_pr(branch, master_content):
             pr_number = open_pr(sync_branch, branch)
             return f":arrow_right: PR #{pr_number} created", True
         except subprocess.CalledProcessError as e:
-            return f":x: Failed to create PR: {e}", False
+            return ":x: Failed to create PR", False
 
 
 def find_open_pr(head, base):
@@ -201,7 +201,6 @@ def open_pr(sync_branch, base_branch):
             "This keeps the major version bump history up to date so that builds "
             "from this release branch compute correct version compatibility ranges."
         ),
-        "--label", "automated",
     ])
     pr_url = result.stdout.strip()
     pr_number = pr_url.rstrip("/").split("/")[-1]
