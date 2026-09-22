@@ -16,8 +16,8 @@ on:
     inputs:
       dry-run:
         description: 'Log what would be updated without creating PRs'
-        type: string
-        default: 'true'
+        type: boolean
+        default: true
       supported-versions:
         description: 'Comma-separated list of versions to sync (e.g. "4.10,4.11,5.0"). Overrides the RH API lookup. Useful for testing or when the API is unavailable.'
         type: string

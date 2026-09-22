@@ -82,7 +82,7 @@ def get_supported_versions(override):
             ]
             logging.info(f"RH API: supported versions are {versions}")
             return versions
-        except (URLError, KeyError, json.JSONDecodeError) as e:
+        except (URLError, KeyError, IndexError, json.JSONDecodeError) as e:
             logging.warning(
                 f"RH API attempt {attempt}/{MAX_RETRIES} failed: {e}"
             )
@@ -118,7 +118,10 @@ def process_branch(branch, master_content, dry_run):
 def create_or_update_pr(branch, master_content):
     sync_branch = f"{SYNC_BRANCH_PREFIX}{branch}"
 
-    existing_pr = find_open_pr(sync_branch, branch)
+    try:
+        existing_pr = find_open_pr(sync_branch, branch)
+    except subprocess.CalledProcessError as e:
+        return f":x: Failed to query open PRs: {e}"
 
     if existing_pr:
         pr_number = existing_pr["number"]
@@ -163,7 +166,7 @@ def create_sync_branch(sync_branch, base_branch, master_content):
         f.write(master_content)
     run(["git", "add", BUMP_FILE])
     run(["git", "commit", "-m", "chore: sync major_version_bumps.yaml from master"])
-    run(["git", "push", "-u", "origin", sync_branch])
+    run(["git", "push", "--force-with-lease", "-u", "origin", sync_branch])
 
 
 def update_sync_branch(sync_branch, master_content):
