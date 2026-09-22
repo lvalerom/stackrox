@@ -161,22 +161,29 @@ def cleanup_stale_branch(sync_branch):
 
 
 def create_sync_branch(sync_branch, base_branch, master_content):
-    run(["git", "checkout", "-B", sync_branch, f"origin/{base_branch}"])
-    with open(BUMP_FILE, "w") as f:
-        f.write(master_content)
-    run(["git", "add", BUMP_FILE])
-    run(["git", "commit", "-m", "chore: sync major_version_bumps.yaml from master"])
-    run(["git", "push", "--force-with-lease", "-u", "origin", sync_branch])
+    try:
+        run(["git", "checkout", "-B", sync_branch, f"origin/{base_branch}"])
+        with open(BUMP_FILE, "w") as f:
+            f.write(master_content)
+        run(["git", "add", BUMP_FILE])
+        run(["git", "commit", "-m", "chore: sync major_version_bumps.yaml from master"])
+        # --force-with-lease in case cleanup_stale_branch failed to delete the remote branch.
+        run(["git", "push", "--force-with-lease", "-u", "origin", sync_branch])
+    finally:
+        reset_worktree()
 
 
 def update_sync_branch(sync_branch, master_content):
-    run(["git", "fetch", "origin", sync_branch])
-    run(["git", "checkout", "-B", sync_branch, f"origin/{sync_branch}"])
-    with open(BUMP_FILE, "w") as f:
-        f.write(master_content)
-    run(["git", "add", BUMP_FILE])
-    run(["git", "commit", "-m", "chore: sync major_version_bumps.yaml from master"])
-    run(["git", "push", "origin", sync_branch])
+    try:
+        run(["git", "fetch", "origin", sync_branch])
+        run(["git", "checkout", "-B", sync_branch, f"origin/{sync_branch}"])
+        with open(BUMP_FILE, "w") as f:
+            f.write(master_content)
+        run(["git", "add", BUMP_FILE])
+        run(["git", "commit", "-m", "chore: sync major_version_bumps.yaml from master"])
+        run(["git", "push", "origin", sync_branch])
+    finally:
+        reset_worktree()
 
 
 def open_pr(sync_branch, base_branch):
@@ -201,6 +208,12 @@ def open_pr(sync_branch, base_branch):
 def configure_git():
     run(["git", "config", "user.name", "github-actions[bot]"])
     run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+
+
+def reset_worktree():
+    run(["git", "reset", "HEAD", "--", "."], check=False)
+    run(["git", "checkout", "--", "."], check=False)
+    run(["git", "clean", "-fd"], check=False)
 
 
 def branch_exists(ref):
