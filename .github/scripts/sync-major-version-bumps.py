@@ -46,20 +46,23 @@ def main():
         dry_run = True
 
     versions = get_supported_versions(override)
-    master_content = git_show("origin/master", BUMP_FILE)
+    master_content = git_show_safe("origin/master", BUMP_FILE)
+    if master_content is None:
+        logging.error(f"{BUMP_FILE} not found on master")
+        sys.exit(1)
 
     configure_git()
 
     results = []
     for version in versions:
         branch = f"release-{version}"
-        status = process_branch(branch, master_content, dry_run)
-        results.append((version, branch, status))
+        status, ok = process_branch(branch, master_content, dry_run)
+        results.append((version, branch, status, ok))
         logging.info(f"{branch}: {status}")
 
     write_summary(results, summary_path, dry_run)
 
-    if any("Failed" in r[2] for r in results):
+    if any(not ok for _, _, _, ok in results):
         sys.exit(1)
 
 
@@ -100,17 +103,17 @@ def process_branch(branch, master_content, dry_run):
     ref = f"origin/{branch}"
 
     if not branch_exists(ref):
-        return ":grey_question: Branch does not exist"
+        return ":grey_question: Branch does not exist", True
 
     branch_content = git_show_safe(ref, BUMP_FILE)
     if branch_content is None:
-        return ":warning: Branch exists but bump file not present"
+        return ":fast_forward: Branch exists but bump file not present", True
 
     if master_content == branch_content:
-        return ":white_check_mark: File matches master"
+        return ":white_check_mark: File matches master", True
 
     if dry_run:
-        return ":fast_forward: File differs (dry-run, no PR created)"
+        return ":fast_forward: File differs (dry-run, no PR created)", True
 
     return create_or_update_pr(branch, master_content)
 
@@ -121,27 +124,27 @@ def create_or_update_pr(branch, master_content):
     try:
         existing_pr = find_open_pr(sync_branch, branch)
     except subprocess.CalledProcessError as e:
-        return f":x: Failed to query open PRs: {e}"
+        return f":x: Failed to query open PRs: {e}", False
 
     if existing_pr:
         pr_number = existing_pr["number"]
         sync_content = git_show_safe(f"origin/{sync_branch}", BUMP_FILE)
         if sync_content == master_content:
-            return f":white_check_mark: PR #{pr_number} already has latest content"
+            return f":white_check_mark: PR #{pr_number} already has latest content", True
 
         try:
             update_sync_branch(sync_branch, master_content)
-            return f":arrows_counterclockwise: PR #{pr_number} updated with new commit"
+            return f":arrows_counterclockwise: PR #{pr_number} updated with new commit", True
         except subprocess.CalledProcessError as e:
-            return f":x: Failed to update PR #{pr_number}: {e}"
+            return f":x: Failed to update PR #{pr_number}: {e}", False
     else:
         try:
             cleanup_stale_branch(sync_branch)
             create_sync_branch(sync_branch, branch, master_content)
             pr_number = open_pr(sync_branch, branch)
-            return f":arrow_right: PR #{pr_number} created"
+            return f":arrow_right: PR #{pr_number} created", True
         except subprocess.CalledProcessError as e:
-            return f":x: Failed to create PR: {e}"
+            return f":x: Failed to create PR: {e}", False
 
 
 def find_open_pr(head, base):
@@ -220,10 +223,6 @@ def branch_exists(ref):
     return run(["git", "rev-parse", "--verify", ref], check=False).returncode == 0
 
 
-def git_show(ref, path):
-    return run(["git", "show", f"{ref}:{path}"]).stdout
-
-
 def git_show_safe(ref, path):
     result = run(["git", "show", f"{ref}:{path}"], check=False)
     return result.stdout if result.returncode == 0 else None
@@ -252,7 +251,7 @@ def write_summary(results, summary_path, dry_run):
 
     lines.append("| Version | Branch | Status |")
     lines.append("|---------|--------|--------|")
-    for version, branch, status in results:
+    for version, branch, status, _ in results:
         lines.append(f"| {version} | {branch} | {status} |")
     lines.append("")
 
