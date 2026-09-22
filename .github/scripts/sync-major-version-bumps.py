@@ -41,7 +41,6 @@ def main():
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     override = os.environ.get("SUPPORTED_VERSIONS_OVERRIDE", "")
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
-    logging.debug(f"GITHUB_STEP_SUMMARY={summary_path}")
 
     if event_name == "pull_request":
         dry_run = True
